@@ -1,10 +1,13 @@
 """Agentic RAG built with LangGraph.
 
-Flow:  retrieve -> grade_documents -> (relevant?) -> generate
-                                     \\-> web_search -> generate
+Flow:  classify ─(chitchat)─> chitchat ─> END
+                └(question)─> retrieve -> grade_documents ─(relevant)─> generate
+                                                          └(none)────> web_search -> generate
 
-The relevance grader is the agentic gate: if the retrieved PDF chunks don't
-answer the question, the graph falls back to a Tavily web search.
+Two agentic gates:
+  1. classify — greetings / small talk answer directly (no retrieval, no web).
+  2. grade_documents — if the retrieved PDF chunks don't answer the question,
+     fall back to a Tavily web search.
 """
 from __future__ import annotations
 
@@ -28,8 +31,9 @@ class GraphState(TypedDict):
     namespace: str
     documents: list[Document]
     generation: str
-    source: Literal["documents", "web"]
+    source: Literal["documents", "web", "chitchat"]
     web_search: bool
+    intent: Literal["chitchat", "question"]
 
 
 # --- Structured grader output ---------------------------------------------
@@ -38,6 +42,18 @@ class GradeDocuments(BaseModel):
 
     binary_score: str = Field(
         description="Are the documents relevant to the question? 'yes' or 'no'."
+    )
+
+
+class ClassifyIntent(BaseModel):
+    """Whether the user input needs document/web lookup or is just small talk."""
+
+    intent: Literal["chitchat", "question"] = Field(
+        description=(
+            "'chitchat' for greetings, thanks, or small talk that needs no "
+            "information lookup (e.g. 'hi', 'how are you', 'thanks'). "
+            "'question' for anything that asks for information."
+        )
     )
 
 
@@ -56,6 +72,45 @@ def _tavily() -> TavilyClient:
 
 
 # --- Nodes ----------------------------------------------------------------
+def classify(state: GraphState) -> dict:
+    """Decide whether the input is small talk or a real information request."""
+    classifier = _llm().with_structured_output(ClassifyIntent)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "Classify the user's message. Return 'chitchat' for greetings, "
+                "thanks, or small talk that needs no information lookup. Return "
+                "'question' for anything asking for information.",
+            ),
+            ("human", "{question}"),
+        ]
+    )
+    try:
+        result = (prompt | classifier).invoke({"question": state["question"]})
+        intent = result.intent
+    except Exception:
+        intent = "question"  # safe default: fall through to RAG
+    return {"intent": intent}
+
+
+def chitchat(state: GraphState) -> dict:
+    """Answer greetings / small talk directly, without retrieval or web search."""
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a friendly assistant for a PDF question-answering app. "
+                "Reply briefly to the greeting or small talk, and invite the user "
+                "to ask about their uploaded documents.",
+            ),
+            ("human", "{question}"),
+        ]
+    )
+    answer = (prompt | _llm()).invoke({"question": state["question"]}).content
+    return {"generation": answer, "source": "chitchat", "documents": []}
+
+
 def retrieve(state: GraphState) -> dict:
     try:
         vectorstore = get_vectorstore(state["namespace"])
@@ -144,6 +199,10 @@ def generate(state: GraphState) -> dict:
 
 
 # --- Routing --------------------------------------------------------------
+def route_intent(state: GraphState) -> Literal["chitchat", "retrieve"]:
+    return "chitchat" if state["intent"] == "chitchat" else "retrieve"
+
+
 def decide_route(state: GraphState) -> Literal["web_search", "generate"]:
     return "web_search" if state["web_search"] else "generate"
 
@@ -151,12 +210,20 @@ def decide_route(state: GraphState) -> Literal["web_search", "generate"]:
 @functools.lru_cache(maxsize=1)
 def build_graph():
     workflow = StateGraph(GraphState)
+    workflow.add_node("classify", classify)
+    workflow.add_node("chitchat", chitchat)
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("grade_documents", grade_documents)
     workflow.add_node("web_search", web_search)
     workflow.add_node("generate", generate)
 
-    workflow.add_edge(START, "retrieve")
+    workflow.add_edge(START, "classify")
+    workflow.add_conditional_edges(
+        "classify",
+        route_intent,
+        {"chitchat": "chitchat", "retrieve": "retrieve"},
+    )
+    workflow.add_edge("chitchat", END)
     workflow.add_edge("retrieve", "grade_documents")
     workflow.add_conditional_edges(
         "grade_documents",
@@ -180,6 +247,7 @@ def run_agent(question: str, namespace: str) -> dict:
             "generation": "",
             "source": "documents",
             "web_search": False,
+            "intent": "question",
         }
     )
     return {

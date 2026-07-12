@@ -56,7 +56,7 @@ with st.sidebar:
 st.title("Agentic RAG 📚")
 st.caption(
     "Ask about your uploaded PDFs. If the answer isn't in them, "
-    "I'll search the web with Tavily."
+    "I'll search the web."
 )
 
 # Render history
@@ -78,11 +78,11 @@ if prompt := st.chat_input("Ask a question…"):
 
         answer = result["answer"]
         source = result["source"]
-        badge = (
-            "📄 Answered from your documents"
-            if source == "documents"
-            else "🌐 Answered from web search"
-        )
+        badge = {
+            "documents": "📄 Answered from your documents",
+            "web": "🌐 Answered from web search",
+            "chitchat": "💬 Chat",
+        }.get(source, "💬 Chat")
 
         st.markdown(answer)
         st.caption(badge)
