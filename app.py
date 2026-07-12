@@ -1,6 +1,4 @@
 """Streamlit UI for the agentic RAG application."""
-import uuid
-
 import streamlit as st
 
 import config
@@ -10,8 +8,10 @@ from ingest import process_pdfs
 st.set_page_config(page_title="Agentic RAG — Chat with your PDFs", page_icon="📚")
 
 # --- Session state --------------------------------------------------------
+# Stable namespace (config) so uploads and queries share the same Pinecone
+# location across sessions and deploys.
 if "namespace" not in st.session_state:
-    st.session_state.namespace = uuid.uuid4().hex
+    st.session_state.namespace = config.PINECONE_NAMESPACE
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "docs_ready" not in st.session_state:

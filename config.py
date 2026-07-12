@@ -14,6 +14,9 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "pdf-rag")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
+# Stable namespace so uploads and queries share the same location across
+# sessions/deploys. Override per-deploy with PINECONE_NAMESPACE if needed.
+PINECONE_NAMESPACE = os.getenv("PINECONE_NAMESPACE", "af5455c8548342e18db3766e39d2bf08")
 
 # --- Models ---------------------------------------------------------------
 EMBEDDING_MODEL = "text-embedding-3-small"
